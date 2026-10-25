@@ -121,7 +121,12 @@ static void parse_go_import_spec(CBMExtractCtx *ctx, TSNode spec) {
     if (!path || !path[0]) {
         return;
     }
-
+    /* cgo: `import "C"` is a pseudo-package, not a real import: "C" is
+     * reserved by go/build and no package with that path can exist.
+     * Drop it so it does not produce a phantom package import. */
+    if (strcmp(path, "C") == 0) {
+        return;
+    }
     TSNode name_node = ts_node_child_by_field_name(spec, TS_FIELD("name"));
     const char *local_name =
         !ts_node_is_null(name_node) ? cbm_node_text(a, name_node, ctx->source) : path_last(a, path);
