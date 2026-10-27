@@ -7680,6 +7680,53 @@ TEST(pipeline_arg_url_rejects_non_http_slash_arguments) {
     PASS();
 }
 
+/* The shape real Swift actually writes: the URL is built by a constructor and
+ * force-unwrapped, so the literal is two levels below the argument list. This
+ * is what issue #1892 reported from a real project. */
+TEST(pipeline_swift_nested_url_makes_route_issue1892) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "%s/cbm_swiftnested_XXXXXX", cbm_tmpdir());
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("tmpdir");
+    }
+
+    write_temp_file(tmp, "Sources/Client.swift",
+                    "import Foundation\n"
+                    "final class Client {\n"
+                    "    func listWidgets() {\n"
+                    "        URLSession.shared.dataTask(with: "
+                    "URL(string: \"/api/v1/widgets\")!)\n"
+                    "    }\n"
+                    "}\n");
+
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_store_t *s = th_open_repo_store(tmp);
+    ASSERT_NOT_NULL(s);
+
+    ASSERT_GTE(cbm_store_count_edges_by_type(s, project, "HTTP_CALLS"), 1);
+
+    cbm_node_t *routes = NULL;
+    int route_count = 0;
+    cbm_store_find_nodes_by_label(s, project, "Route", &routes, &route_count);
+    int widget_routes = 0;
+    for (int i = 0; i < route_count; i++) {
+        if (routes[i].qualified_name && strstr(routes[i].qualified_name, "/api/v1/widgets")) {
+            widget_routes++;
+        }
+    }
+    cbm_store_free_nodes(routes, route_count);
+    ASSERT_GTE(widget_routes, 1);
+
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    th_rmtree(tmp);
+    PASS();
+}
+
 /* #1892: Swift produced no Route node and no HTTP_CALLS edge, because the
  * Swift grammar has no "arguments" field and the generic lookup therefore read
  * no call arguments at all. Alamofire/URLSession were already in the service
@@ -10218,6 +10265,7 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_incremental_delete_direct_zova_matches_fresh_full);
     RUN_TEST(pipeline_incremental_rename_direct_zova_matches_fresh_full);
     RUN_TEST(pipeline_incremental_infra_route_change_matches_fresh_full);
+    RUN_TEST(pipeline_swift_nested_url_makes_route_issue1892);
     RUN_TEST(pipeline_swift_http_call_makes_route_issue1892);
     RUN_TEST(pipeline_arg_url_rejects_non_http_slash_arguments);
     RUN_TEST(pipeline_incremental_shared_infra_url_survives_owner_change);

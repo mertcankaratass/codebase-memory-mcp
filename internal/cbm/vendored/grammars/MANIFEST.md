@@ -62,6 +62,7 @@ Re-vendoring from upstream must re-apply these.
 | crystal    | `crystal/scanner.c`, serialize    | guard `memcpy(&buffer[offset], state->literals.contents, literal_content_size)` with `if (literal_content_size > 0)` | UBSan: zero-length `memcpy` with a NULL/0-size source on the empty-state serialize round-trip (formal UB, harmless) |
 | rescript   | `rescript/scanner.c`, deserialize | guard `memcpy(state, buffer, n_bytes)` with `if (n_bytes > 0)` | UBSan: zero-length `memcpy` with a NULL `buffer` / `n_bytes == 0` on empty-state deserialize (formal UB, harmless). The sibling serialize copies a fixed `sizeof(ScannerState)` (always > 0, non-NULL src) and needs no guard. |
 | purescript | `purescript/scanner.c`, serialize | guard `memcpy(buffer, indents->data, to_copy)` with `if (to_copy > 0)` | UBSan: zero-length `memcpy` with a NULL/0-size source when the indent vector is empty (formal UB, harmless) |
+| swift      | `swift/scanner.c`, OP_SYMBOL_SUPPRESSOR (:132) and suppressor loop (:515) | use 64-bit shift `UINT64_C(1)` for suppressor bitmask (`FAKE_TRY_BANG`) | FAKE_TRY_BANG is token 32, so a 32-bit 1 << n is undefined behavior and drops the suppressor bit; UINT64_C(1) keeps it. |
 
 ## Vendored from verified upstream
 
