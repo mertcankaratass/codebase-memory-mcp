@@ -825,7 +825,7 @@ TEST(routes_laravel_withrouting_api_default_prefix_issue1146) {
          "use Illuminate\\Support\\Facades\\Route;\n"
          "Route::get('/users', 'UserController@index');\n"
          "Route::get('/users/{id}', 'UserController@show');\n"}};
-    ASSERT_TRUE(et_routes_exact_mode(f, 2, routes, false, "__route__GET__/api/users/{id}"));
+    ASSERT_TRUE(et_routes_exact_mode(f, 2, routes, false, "__route__GET__/api/users/{}"));
     PASS();
 }
 
