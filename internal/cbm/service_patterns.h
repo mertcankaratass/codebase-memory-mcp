@@ -34,6 +34,9 @@ void cbm_service_patterns_init(void);
  * "project.venv.requests.api.get"). Import-alias transparent. */
 cbm_svc_kind_t cbm_service_pattern_match(const char *resolved_qn);
 
+/* True when the bare callee spelling is the global fetch function. */
+bool cbm_service_pattern_is_global_fetch(const char *callee_name);
+
 /* True when a string literal is a plausible HTTP route for the given callee.
  * Rejects filesystem paths and non-HTTP string consumers. */
 bool cbm_service_pattern_is_http_route_literal(const char *literal, const char *callee_name);

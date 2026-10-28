@@ -4,6 +4,7 @@
 #include "lang_specs.h"
 #include "extract_unified.h"
 #include "extract_url_fold.h" // URL constant folding (#706, #1147)
+#include "service_patterns.h"
 #include "foundation/constants.h"
 #include "extract_node_stack.h"
 #include "tree_sitter/api.h" // TSNode, ts_node_*

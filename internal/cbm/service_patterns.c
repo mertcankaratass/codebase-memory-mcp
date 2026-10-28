@@ -854,6 +854,10 @@ const char *cbm_service_pattern_route_method(const char *callee_name) {
     return NULL;
 }
 
+bool cbm_service_pattern_is_global_fetch(const char *callee_name) {
+    return callee_name != NULL && strcmp(callee_name, "fetch") == 0;
+}
+
 const char *cbm_service_pattern_broker(const char *resolved_qn) {
     if (!resolved_qn) {
         return NULL;
