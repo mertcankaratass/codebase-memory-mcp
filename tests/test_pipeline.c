@@ -850,15 +850,16 @@ typedef struct {
 } AxiosWrapperObs;
 
 static AxiosWrapperObs observe_axios_wrapper(const char *repo, const char *db) {
+    (void)db;
     AxiosWrapperObs o;
     memset(&o, 0xff, sizeof(o)); /* -1 everywhere: "not observed" */
-    cbm_pipeline_t *p = cbm_pipeline_new(repo, db, CBM_MODE_FULL);
+    cbm_pipeline_t *p = cbm_pipeline_new(repo, NULL, CBM_MODE_FULL);
     if (!p) {
         return o;
     }
     o.run_rc = cbm_pipeline_run(p);
     const char *proj = cbm_pipeline_project_name(p);
-    cbm_store_t *s = cbm_store_open_path(db);
+    cbm_store_t *s = th_open_repo_store(repo);
     if (s && proj) {
         o.wrapper_http =
             named_edge_count(s, proj, "HTTP_CALLS", "loadWrapperOrders", "/api/orders");
