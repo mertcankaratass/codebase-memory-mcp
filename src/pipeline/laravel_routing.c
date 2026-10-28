@@ -14,7 +14,7 @@
 #include "tree_sitter/api.h"
 #include "foundation/compat_fs.h"
 #include "foundation/constants.h"
-#include "foundation/mem_core.h"
+#include "foundation/mem.h"
 
 #include <stdbool.h>
 #include <stdint.h>
