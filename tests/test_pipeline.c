@@ -2102,14 +2102,12 @@ TEST(pipeline_url_constant_folding_http_calls_issue706_1147) {
                     "  return fetch(API_ENDPOINTS.USER);\n"
                     "}\n");
 
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/urlfold.db", tmp);
-    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
     ASSERT_NOT_NULL(p);
     ASSERT_EQ(cbm_pipeline_run(p), 0);
     const char *project = cbm_pipeline_project_name(p);
 
-    cbm_store_t *s = cbm_store_open_path(db_path);
+    cbm_store_t *s = th_open_repo_store(tmp);
     ASSERT_NOT_NULL(s);
 
     /* Asserted per edge, not by count: a client call may also carry a second,
@@ -2202,12 +2200,10 @@ TEST(pipeline_folded_topics_preserve_identity_sequential_parallel) {
             cbm_unsetenv("CBM_INDEX_SINGLE_THREAD");
             cbm_setenv("CBM_WORKERS", "4", 1);
         }
-        char db_path[512];
-        snprintf(db_path, sizeof(db_path), "%s/topics_%d.db", tmp, mode);
-        cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+        cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
         run_rc[mode] = p ? cbm_pipeline_run(p) : -1;
         const char *project = p ? cbm_pipeline_project_name(p) : NULL;
-        cbm_store_t *s = cbm_store_open_path(db_path);
+        cbm_store_t *s = th_open_repo_store(tmp);
         opened[mode] = s != NULL;
         if (s && project) {
             for (size_t i = 0; i < sizeof(functions) / sizeof(functions[0]); i++) {
@@ -2279,12 +2275,10 @@ TEST(pipeline_relative_folded_wrapper_url_candidates) {
     char *saved_workers = old_workers ? strdup(old_workers) : NULL;
     cbm_unsetenv("CBM_INDEX_SINGLE_THREAD");
     cbm_setenv("CBM_WORKERS", "4", 1);
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/wrappers.db", tmp);
-    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
     int run_rc = p ? cbm_pipeline_run(p) : -1;
     const char *project = p ? cbm_pipeline_project_name(p) : NULL;
-    cbm_store_t *s = cbm_store_open_path(db_path);
+    cbm_store_t *s = th_open_repo_store(tmp);
     bool opened = s != NULL;
     int launch_edges = 0;
     int config_edges = 0;
