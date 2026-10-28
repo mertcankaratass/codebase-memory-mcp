@@ -1285,7 +1285,8 @@ static const char *decorator_method_name(const char *attr_text) {
     if (strcmp(method, "patch") == 0 || strcmp(method, "Patch") == 0) {
         return "PATCH";
     }
-    if (strcmp(method, "route") == 0 || strcmp(method, "api_route") == 0) {
+    if (strcmp(method, "route") == 0 || strcmp(method, "api_route") == 0 ||
+        strcmp(method, "websocket") == 0 || strcmp(method, "websocket_route") == 0) {
         return "ANY";
     }
     return NULL;

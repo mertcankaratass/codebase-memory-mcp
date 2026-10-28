@@ -514,6 +514,13 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
          * node, not the absent library). Without this the call is dropped and
          * cross-repo matching finds no edge to match (#523). The parallel path
          * has the equivalent empty-resolution fallback in resolve_file_calls. */
+        /* Route registration on an unresolvable callee: router.get('/x', ...) etc. */
+        if (cbm_service_pattern_route_method(call->callee_name) != NULL && call->first_string_arg &&
+            call->first_string_arg[0] == '/') {
+            handle_route_registration(ctx, call, source_node, module_qn, imp_keys, imp_vals,
+                                      imp_count);
+            return SKIP_ONE;
+        }
         cbm_svc_kind_t esvc = cbm_service_pattern_match(call->callee_name);
         if (esvc == CBM_SVC_HTTP || esvc == CBM_SVC_ASYNC) {
             const char *u = call->first_string_arg;

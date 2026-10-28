@@ -7741,11 +7741,18 @@ TEST(pipeline_arg_url_rejects_non_http_slash_arguments) {
 static int count_edges_with_url_path(cbm_store_t *s, const char *project, const char *keyword) {
     cbm_edge_t *es = NULL;
     int n = 0;
-    cbm_store_find_edges_by_url_path(s, project, keyword, &es, &n);
+    int matches = 0;
+    if (cbm_store_find_edges_by_type(s, project, "HTTP_CALLS", &es, &n) == CBM_STORE_OK && es) {
+        for (int i = 0; i < n; i++) {
+            if (es[i].properties_json && strstr(es[i].properties_json, keyword)) {
+                matches++;
+            }
+        }
+    }
     if (es) {
         cbm_store_free_edges(es, n);
     }
-    return n;
+    return matches;
 }
 
 /* Distilled from PR #1245: detect_url_in_args (parallel resolver, >= 50 files)
