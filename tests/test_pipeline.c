@@ -7829,31 +7829,111 @@ TEST(pipeline_arg_url_rejects_document_file_paths) {
     PASS();
 }
 
-/* A failed SQL query must never look like an absent false edge. */
-static int navigation_probe_count(cbm_store_t *store, const char *sql, const char *project,
-                                  const char *value, const char *source_name) {
-    sqlite3_stmt *st = NULL;
-    sqlite3 *db = cbm_store_get_db(store);
-    if (!db || sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
-        sqlite3_finalize(st);
+/* Count nodes with the given label in the project. */
+static int nav_count_nodes_by_label(cbm_store_t *s, const char *project, const char *label) {
+    cbm_node_t *nodes = NULL;
+    int count = 0;
+    if (cbm_store_find_nodes_by_label(s, project, label, &nodes, &count) != CBM_STORE_OK) {
         return -1;
     }
-    int count = -1;
-    bool bound = sqlite3_bind_text(st, 1, project, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
-                 sqlite3_bind_text(st, 2, value, -1, SQLITE_TRANSIENT) == SQLITE_OK;
-    if (bound && source_name) {
-        bound = sqlite3_bind_text(st, 3, source_name, -1, SQLITE_TRANSIENT) == SQLITE_OK;
-    }
-    if (bound && sqlite3_step(st) == SQLITE_ROW) {
-        count = sqlite3_column_int(st, 0);
-        if (sqlite3_step(st) != SQLITE_DONE) {
-            count = -1;
-        }
-    }
-    if (sqlite3_finalize(st) != SQLITE_OK) {
-        count = -1;
+    if (nodes) {
+        cbm_store_free_nodes(nodes, count);
     }
     return count;
+}
+
+/* Count Route nodes with the given name in the project. */
+static int nav_count_routes_named(cbm_store_t *s, const char *project, const char *name) {
+    cbm_node_t *nodes = NULL;
+    int count = 0;
+    if (cbm_store_find_nodes_by_name(s, project, name, &nodes, &count) != CBM_STORE_OK) {
+        return -1;
+    }
+    int matches = 0;
+    for (int i = 0; i < count; i++) {
+        if (nodes[i].label && strcmp(nodes[i].label, "Route") == 0) {
+            matches++;
+        }
+    }
+    if (nodes) {
+        cbm_store_free_nodes(nodes, count);
+    }
+    return matches;
+}
+
+/* Count nodes with the given name and file_path substring in the project. */
+static int nav_count_source_nodes(cbm_store_t *s, const char *project, const char *name,
+                                  const char *file_path) {
+    cbm_node_t *nodes = NULL;
+    int count = 0;
+    if (cbm_store_find_nodes_by_name(s, project, name, &nodes, &count) != CBM_STORE_OK) {
+        return -1;
+    }
+    int matches = 0;
+    for (int i = 0; i < count; i++) {
+        if (nodes[i].file_path && strstr(nodes[i].file_path, file_path) != NULL) {
+            matches++;
+        }
+    }
+    if (nodes) {
+        cbm_store_free_nodes(nodes, count);
+    }
+    return matches;
+}
+
+/* Count HTTP_CALLS edges out of source_name with matching url_path property. */
+static int nav_count_http_calls_with_url(cbm_store_t *s, const char *project,
+                                         const char *source_name, const char *url_path) {
+    cbm_edge_t *edges = NULL;
+    int edge_count = 0;
+    if (cbm_store_find_edges_by_type(s, project, "HTTP_CALLS", &edges, &edge_count) != CBM_STORE_OK) {
+        return -1;
+    }
+    int matches = 0;
+    for (int i = 0; i < edge_count; i++) {
+        cbm_node_t source = {0};
+        int source_ok = cbm_store_find_node_by_id(s, edges[i].source_id, &source) == CBM_STORE_OK;
+        if (source_ok && source.name && strcmp(source.name, source_name) == 0) {
+            const char *props = edges[i].properties_json ? edges[i].properties_json : "";
+            char needle[256];
+            snprintf(needle, sizeof(needle), ""url_path":"%s"", url_path);
+            if (strstr(props, needle) != NULL) {
+                matches++;
+            }
+        }
+        cbm_node_free_fields(&source);
+    }
+    if (edges) {
+        cbm_store_free_edges(edges, edge_count);
+    }
+    return matches;
+}
+
+/* Count edges of edge_type between exact source and target node names. */
+static int nav_count_named_edges(cbm_store_t *s, const char *project, const char *edge_type,
+                                 const char *source_name, const char *target_name) {
+    cbm_edge_t *edges = NULL;
+    int edge_count = 0;
+    if (cbm_store_find_edges_by_type(s, project, edge_type, &edges, &edge_count) != CBM_STORE_OK) {
+        return -1;
+    }
+    int matches = 0;
+    for (int i = 0; i < edge_count; i++) {
+        cbm_node_t source = {0};
+        cbm_node_t target = {0};
+        int source_ok = cbm_store_find_node_by_id(s, edges[i].source_id, &source) == CBM_STORE_OK;
+        int target_ok = cbm_store_find_node_by_id(s, edges[i].target_id, &target) == CBM_STORE_OK;
+        if (source_ok && target_ok && source.name && target.name &&
+            strcmp(source.name, source_name) == 0 && strcmp(target.name, target_name) == 0) {
+            matches++;
+        }
+        cbm_node_free_fields(&source);
+        cbm_node_free_fields(&target);
+    }
+    if (edges) {
+        cbm_store_free_edges(edges, edge_count);
+    }
+    return matches;
 }
 
 /* #1250: exercise the generic URL heuristic with real extracted occurrences
@@ -7892,13 +7972,6 @@ TEST(pipeline_arg_url_skips_client_navigation) {
         {"this.history.pushState", "goHist", "/account/history"},
         {"navigateTo", "goWidget", "/widgetTypes/view/{}"},
     };
-    static const char edge_sql[] = "SELECT count(*) FROM edges e JOIN nodes s ON s.id=e.source_id "
-                                   "WHERE e.project=?1 AND e.type='HTTP_CALLS' "
-                                   "AND json_extract(e.properties,'$.url_path')=?2 AND s.name=?3";
-    static const char route_sql[] =
-        "SELECT count(*) FROM nodes WHERE project=?1 AND label='Route' AND name=?2";
-    static const char source_sql[] =
-        "SELECT count(*) FROM nodes WHERE project=?1 AND name=?2 AND file_path=?3";
     static const struct {
         const char *source;
         const char *path;
@@ -7957,11 +8030,9 @@ TEST(pipeline_arg_url_skips_client_navigation) {
     const char *workers = getenv("CBM_WORKERS");
     bool configured =
         workers && strcmp(workers, "4") == 0 && getenv("CBM_INDEX_SINGLE_THREAD") == NULL;
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/arg_url_nav.db", tmp);
-    cbm_pipeline_t *p = configured ? cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL) : NULL;
+    cbm_pipeline_t *p = configured ? cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL) : NULL;
     int run_rc = p ? cbm_pipeline_run(p) : -1;
-    cbm_store_t *store = run_rc == 0 ? cbm_store_open_path(db_path) : NULL;
+    cbm_store_t *store = run_rc == 0 ? th_open_repo_store(tmp) : NULL;
     bool observed = store != NULL;
     int nav_edges[6], nav_routes[6], sources[6], good_edges[6];
     int files = -1, async_edges = -1, async_http = -1;
@@ -7973,28 +8044,21 @@ TEST(pipeline_arg_url_skips_client_navigation) {
     }
     if (store) {
         const char *project = cbm_pipeline_project_name(p);
-        files = navigation_probe_count(store,
-                                       "SELECT count(*) FROM nodes WHERE project=?1 AND label=?2",
-                                       project, "File", NULL);
+        files = nav_count_nodes_by_label(store, project, "File");
         for (size_t i = 0; i < 6; i++) {
-            nav_edges[i] = navigation_probe_count(store, edge_sql, project, navigation[i].path,
-                                                  navigation[i].source);
-            nav_routes[i] =
-                navigation_probe_count(store, route_sql, project, navigation[i].path, NULL);
-            sources[i] = navigation_probe_count(store, source_sql, project, navigation[i].source,
+            nav_edges[i] = nav_count_http_calls_with_url(store, project, navigation[i].source,
+                                                         navigation[i].path);
+            nav_routes[i] = nav_count_routes_named(store, project, navigation[i].path);
+            sources[i] = nav_count_source_nodes(store, project, navigation[i].source,
                                                 "src/page.ts");
         }
         for (size_t i = 0; i < 6; i++) {
-            good_edges[i] = navigation_probe_count(store, edge_sql, project, positive[i].path,
-                                                   positive[i].source);
+            good_edges[i] = nav_count_http_calls_with_url(store, project, positive[i].source,
+                                                          positive[i].path);
         }
-        async_edges = navigation_probe_count(
-            store,
-            "SELECT count(*) FROM edges e JOIN nodes s ON s.id=e.source_id "
-            "JOIN nodes t ON t.id=e.target_id WHERE e.project=?1 AND e.type='ASYNC_CALLS' "
-            "AND t.name=?2 AND s.name=?3",
-            project, "/tenant/events", "publish");
-        async_http = navigation_probe_count(store, edge_sql, project, "/tenant/events", "publish");
+        async_edges = nav_count_named_edges(store, project, "ASYNC_CALLS", "publish",
+                                            "/tenant/events");
+        async_http = nav_count_http_calls_with_url(store, project, "publish", "/tenant/events");
         cbm_store_close(store);
     }
     cbm_pipeline_free(p);

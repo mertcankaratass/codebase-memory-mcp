@@ -1554,6 +1554,8 @@ static bool try_route_from_decorator_call(CBMArena *a, TSNode dchild, const char
             *out_method = method;
             return true;
         }
+        /* If decorator has arguments but none resolved to a '/'-prefixed path,
+         * intentionally produce no Route to prevent false root routes (e.g. @mock.patch). */
         if (ts_node_named_child_count(args) > 0) {
             return false;
         }
