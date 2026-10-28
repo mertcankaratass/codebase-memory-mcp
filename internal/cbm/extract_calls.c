@@ -1348,6 +1348,50 @@ static const char *extract_nth_string_arg(CBMExtractCtx *ctx, TSNode args, uint3
 
 // --- Unified handler: called once per node by the cursor walk ---
 
+static const char *extract_string_value(CBMExtractCtx *ctx, TSNode val_node, bool url_context);
+
+/* A JS/TS request-config object -- `http({url: `/users/${id}`, method: 'GET'})`,
+ * `axios({url: '/orders'})`, the shape Orval and similar generators emit -- names
+ * its request URL in the `url` property. (#2235) */
+static bool config_object_callee_eligible(const CBMExtractCtx *ctx, const char *callee_name) {
+    if (ctx->language != CBM_LANG_JAVASCRIPT && ctx->language != CBM_LANG_TYPESCRIPT &&
+        ctx->language != CBM_LANG_TSX) {
+        return false;
+    }
+    if (!callee_name || cbm_service_pattern_route_method(callee_name) != NULL) {
+        return false;
+    }
+    static const char get_uri[] = "getUri";
+    size_t clen = strlen(callee_name);
+    size_t glen = sizeof(get_uri) - 1;
+    return !(clen >= glen && strcmp(callee_name + clen - glen, get_uri) == 0);
+}
+
+static TSNode js_config_object_url_node(const CBMExtractCtx *ctx, TSNode obj, const char *callee_name) {
+    TSNode null_node = {0};
+    if (strcmp(ts_node_type(obj), "object") != 0 ||
+        !config_object_callee_eligible(ctx, callee_name)) {
+        return null_node;
+    }
+    uint32_t n = ts_node_named_child_count(obj);
+    for (uint32_t i = 0; i < n; i++) {
+        TSNode pair = ts_node_named_child(obj, i);
+        if (strcmp(ts_node_type(pair), "pair") != 0) {
+            continue;
+        }
+        TSNode key_n = ts_node_child_by_field_name(pair, TS_FIELD("key"));
+        TSNode val_n = ts_node_child_by_field_name(pair, TS_FIELD("value"));
+        if (ts_node_is_null(key_n) || ts_node_is_null(val_n)) {
+            continue;
+        }
+        const char *key = strip_quotes(ctx->arena, cbm_node_text(ctx->arena, key_n, ctx->source));
+        if (key && strcmp(key, "url") == 0) {
+            return val_n;
+        }
+    }
+    return null_node;
+}
+
 /* Topic slots carry their literal identity even when a URL projection exists. */
 static bool is_topic_keyword(const char *key) {
     static const char *keywords[] = {"topic",    "topic_id", "topic_name", "queue", "queue_name",
@@ -1425,7 +1469,15 @@ static void extract_call_args(CBMExtractCtx *ctx, TSNode args, CBMCall *call) {
                 call->arg_count++;
                 continue;
             }
-            if (is_string_like(ak) && ca->expr) {
+            if (strcmp(ak, "object") == 0) {
+                TSNode url_n = js_config_object_url_node(ctx, arg_node, call->callee_name);
+                if (!ts_node_is_null(url_n)) {
+                    fold_call_arg(ctx, url_n, ca);
+                    if (!ca->value) {
+                        ca->value = extract_string_value(ctx, url_n, false);
+                    }
+                }
+            } else if (is_string_like(ak) && ca->expr) {
                 ca->value = strip_quotes(ctx->arena, ca->expr);
             } else if (strcmp(ak, "template_string") == 0) {
                 /* Flattened {} form so downstream url-arg detection joins the
@@ -1753,6 +1805,21 @@ static const char *extract_url_or_topic_arg(CBMExtractCtx *ctx, TSNode args,
             const char *val = extract_keyword_url(ctx, arg, callee_name);
             if (val) {
                 return val;
+            }
+            continue;
+        }
+
+        /* JS/TS request-config object: `axios({url: '/orders'})` (#2235). */
+        if (strcmp(ak, "object") == 0) {
+            TSNode url_n = js_config_object_url_node(ctx, arg, callee_name);
+            if (!ts_node_is_null(url_n)) {
+                const char *val = cbm_url_fold_exact(ctx, url_n);
+                if (!val) {
+                    val = extract_string_value(ctx, url_n, false);
+                }
+                if (val) {
+                    return val;
+                }
             }
             continue;
         }

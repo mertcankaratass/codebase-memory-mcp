@@ -2102,6 +2102,11 @@ TEST(pipeline_url_constant_folding_http_calls_issue706_1147) {
                     "  return fetch(API_ENDPOINTS.USER);\n"
                     "}\n");
 
+    char *proj_name = cbm_project_name_from_path(tmp);
+    if (proj_name) {
+        th_remove_project_workspace(proj_name);
+        free(proj_name);
+    }
     cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
     ASSERT_NOT_NULL(p);
     ASSERT_EQ(cbm_pipeline_run(p), 0);
@@ -2194,6 +2199,11 @@ TEST(pipeline_folded_topics_preserve_identity_sequential_parallel) {
                             "tenant/events", "tenant//events", "{}/events",
                             "tenant/events", "tenant/events",  "/tenant/events"};
     for (int mode = 0; mode < 2; mode++) {
+        char *proj_name = cbm_project_name_from_path(tmp);
+        if (proj_name) {
+            th_remove_project_workspace(proj_name);
+            free(proj_name);
+        }
         if (mode == 0) {
             cbm_setenv("CBM_INDEX_SINGLE_THREAD", "1", 1);
         } else {
@@ -2275,6 +2285,11 @@ TEST(pipeline_relative_folded_wrapper_url_candidates) {
     char *saved_workers = old_workers ? strdup(old_workers) : NULL;
     cbm_unsetenv("CBM_INDEX_SINGLE_THREAD");
     cbm_setenv("CBM_WORKERS", "4", 1);
+    char *proj_name = cbm_project_name_from_path(tmp);
+    if (proj_name) {
+        th_remove_project_workspace(proj_name);
+        free(proj_name);
+    }
     cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
     int run_rc = p ? cbm_pipeline_run(p) : -1;
     const char *project = p ? cbm_pipeline_project_name(p) : NULL;
