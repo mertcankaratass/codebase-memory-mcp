@@ -7896,7 +7896,7 @@ static int nav_count_http_calls_with_url(cbm_store_t *s, const char *project,
         if (source_ok && source.name && strcmp(source.name, source_name) == 0) {
             const char *props = edges[i].properties_json ? edges[i].properties_json : "";
             char needle[256];
-            snprintf(needle, sizeof(needle), ""url_path":"%s"", url_path);
+            snprintf(needle, sizeof(needle), "\"url_path\":\"%s\"", url_path);
             if (strstr(props, needle) != NULL) {
                 matches++;
             }
