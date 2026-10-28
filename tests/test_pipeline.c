@@ -7853,12 +7853,12 @@ static int nav_count_nodes_by_label(cbm_store_t *s, const char *project, const c
 static int nav_count_routes_named(cbm_store_t *s, const char *project, const char *name) {
     cbm_node_t *nodes = NULL;
     int count = 0;
-    if (cbm_store_find_nodes_by_name(s, project, name, &nodes, &count) != CBM_STORE_OK) {
+    if (cbm_store_find_nodes_by_label(s, project, "Route", &nodes, &count) != CBM_STORE_OK) {
         return -1;
     }
     int matches = 0;
     for (int i = 0; i < count; i++) {
-        if (nodes[i].label && strcmp(nodes[i].label, "Route") == 0) {
+        if (nodes[i].name && strcmp(nodes[i].name, name) == 0) {
             matches++;
         }
     }
