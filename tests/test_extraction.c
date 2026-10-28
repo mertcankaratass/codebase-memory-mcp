@@ -5195,10 +5195,6 @@ TEST(extract_ts_folded_config_url_and_exclusions) {
     PASS();
 }
 
- /* Reproduce-first: Java module QN must derive from the CONTAINING DIRECTORY, not
-  * the filename stem, so a top-level class `Outer` in `Outer.java` is `t.Outer`,
-  * NOT the doubled `t.Outer.Outer`. The nested method def QN must also equal the
-
 /* Ported from upstream cc7b4a88. */
 /* Function.is_test must follow the file's test-directory membership, not just
  * a test_/_test basename convention: a helper under tests/ with none of those
