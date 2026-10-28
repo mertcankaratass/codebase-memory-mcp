@@ -237,7 +237,8 @@ static void *take_items(spill_rd_t *r, size_t item_size, int *out_count) {
 #define DEF_STRS(X)                                                                \
     X(name) X(qualified_name) X(label) X(file_path) X(signature) X(return_type)    \
     X(receiver) X(docstring) X(parent_class) X(route_path) X(route_method)         \
-    X(structural_profile) X(body_tokens) X(variants) X(alias_value)
+    X(structural_profile) X(body_tokens) X(variants) X(alias_value)                 \
+    X(http_client) X(http_base_url)
 #define DEF_STRVS(X) X(decorators) X(base_classes) X(param_names) X(param_types) X(return_types)
 
 static void null_def(CBMDefinition *x) {
