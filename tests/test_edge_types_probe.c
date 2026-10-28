@@ -1095,7 +1095,7 @@ TEST(handles_laravel_class_handlers_issue1146) {
  * whose route emitter (pass_parallel.c) is a separate code path. */
 TEST(handles_laravel_class_handlers_parallel_issue1146) {
     ASSERT_TRUE(et_handles_exact(et_laravel_class_handlers, ET_LARAVEL_CLASS_FILES,
-                                 et_laravel_class_handlers, 1));
+                                 et_laravel_class_handles, 1));
     PASS();
 }
 
