@@ -804,6 +804,366 @@ TEST(routes_laravel_slashless_no_junk_issue1146) {
     PASS();
 }
 
+/* #1146: Laravel 11+ mounts the files named in bootstrap/app.php's
+ * `->withRouting(api: ...)` under `apiPrefix` (default 'api'); the `web:` file
+ * stays unprefixed. The Route qualified_name is the join key for cross-repo
+ * HTTP matching, so both the Route node's name and its QN must reflect the
+ * composed mount. Sequential pipeline (<= MIN_FILES_FOR_PARALLEL). */
+TEST(routes_laravel_withrouting_api_default_prefix_issue1146) {
+    static const char *routes[] = {"/api/users", "/api/users/{id}", NULL};
+    static const EtFile f[] = {
+        {"bootstrap/app.php",
+         "<?php\n"
+         "use Illuminate\\Foundation\\Application;\n"
+         "return Application::configure()\n"
+         "    ->withRouting(\n"
+         "        web: __DIR__.'/../routes/web.php',\n"
+         "        api: __DIR__.'/../routes/api.php',\n"
+         "    );\n"},
+        {"routes/api.php",
+         "<?php\n"
+         "use Illuminate\\Support\\Facades\\Route;\n"
+         "Route::get('/users', 'UserController@index');\n"
+         "Route::get('/users/{id}', 'UserController@show');\n"}};
+    ASSERT_TRUE(et_routes_exact_mode(f, 2, routes, false, "__route__GET__/api/users/{id}"));
+    PASS();
+}
+
+/* Custom apiPrefix, multi-segment, array form of `api:`. */
+TEST(routes_laravel_withrouting_api_custom_prefix_issue1146) {
+    static const char *routes[] = {"/v2/private/orders", NULL};
+    static const EtFile f[] = {
+        {"bootstrap/app.php",
+         "<?php\n"
+         "use Illuminate\\Foundation\\Application;\n"
+         "return Application::configure()\n"
+         "    ->withRouting(\n"
+         "        api: [__DIR__ . '/../routes/private.php'],\n"
+         "        apiPrefix: 'v2/private',\n"
+         "    );\n"},
+        {"routes/private.php",
+         "<?php\n"
+         "use Illuminate\\Support\\Facades\\Route;\n"
+         "Route::post('/orders', 'OrderController@store');\n"}};
+    ASSERT_TRUE(et_routes_exact_mode(f, 2, routes, false, "__route__POST__/v2/private/orders"));
+    PASS();
+}
+
+/* web: routes stay unprefixed even when apiPrefix is configured. */
+TEST(routes_laravel_withrouting_web_no_prefix_issue1146) {
+    static const char *routes[] = {"/", "/login", NULL};
+    static const EtFile f[] = {
+        {"bootstrap/app.php",
+         "<?php\n"
+         "use Illuminate\\Foundation\\Application;\n"
+         "return Application::configure()\n"
+         "    ->withRouting(\n"
+         "        web: __DIR__ . '/../routes/web.php',\n"
+         "        api: __DIR__ . '/../routes/api.php',\n"
+         "        apiPrefix: 'api/v1',\n"
+         "    );\n"},
+        {"routes/web.php",
+         "<?php\n"
+         "use Illuminate\\Support\\Facades\\Route;\n"
+         "Route::get('/', 'HomeController@index');\n"
+         "Route::post('/login', 'AuthController@login');\n"}};
+    ASSERT_TRUE(et_routes_exact(f, 2, routes));
+    PASS();
+}
+
+/* Control: Laravel <= 10 routes in routes/api.php without a bootstrap/app.php
+ * withRouting call (configured via RouteServiceProvider instead, which this
+ * change does not touch) stay unprefixed, as they were before this fix. */
+TEST(routes_laravel_routeserviceprovider_control_issue1146) {
+    static const char *routes[] = {"/items", NULL};
+    static const EtFile f[] = {
+        {"app/Providers/RouteServiceProvider.php",
+         "<?php\n"
+         "class RouteServiceProvider {\n"
+         "    public function boot() {\n"
+         "        Route::prefix('api')->group(base_path('routes/api.php'));\n"
+         "    }\n"
+         "}\n"},
+        {"routes/api.php",
+         "<?php\n"
+         "use Illuminate\\Support\\Facades\\Route;\n"
+         "Route::get('/items', 'ItemController@index');\n"}};
+    ASSERT_TRUE(et_routes_exact(f, 2, routes));
+    PASS();
+}
+
+/* Non-literal apiPrefix: when the prefix cannot be known statically from the
+ * bootstrap call, routes are left alone rather than prefixed with garbage. */
+TEST(routes_laravel_withrouting_nonliteral_prefix_issue1146) {
+    static const char *routes[] = {"/ping", NULL};
+    static const EtFile f[] = {
+        {"bootstrap/app.php",
+         "<?php\n"
+         "use Illuminate\\Foundation\\Application;\n"
+         "return Application::configure()\n"
+         "    ->withRouting(\n"
+         "        api: __DIR__ . '/../routes/api.php',\n"
+         "        apiPrefix: config('api.prefix'),\n"
+         "    );\n"},
+        {"routes/api.php",
+         "<?php\n"
+         "use Illuminate\\Support\\Facades\\Route;\n"
+         "Route::get('/ping', 'PingController@ping');\n"}};
+    ASSERT_TRUE(et_routes_exact(f, 2, routes));
+    PASS();
+}
+
+/* Parallel pipeline (> MIN_FILES_FOR_PARALLEL) and a Laravel app located in a
+ * monorepo subdirectory (`backend/bootstrap/app.php`). */
+TEST(routes_laravel_withrouting_parallel_subdir_issue1146) {
+    static const char *routes[] = {"/api/health", NULL};
+    static const EtFile f[] = {
+        {"backend/bootstrap/app.php",
+         "<?php\n"
+         "use Illuminate\\Foundation\\Application;\n"
+         "return Application::configure()\n"
+         "    ->withRouting(\n"
+         "        api: base_path('routes/api.php'),\n"
+         "    );\n"},
+        {"backend/routes/api.php",
+         "<?php\n"
+         "use Illuminate\\Support\\Facades\\Route;\n"
+         "Route::get('/health', 'HealthController@check');\n"}};
+    ASSERT_TRUE(et_routes_exact_mode(f, 2, routes, true, "__route__GET__/api/health"));
+    PASS();
+}
+
+/* Assert the exact HANDLES edge set as "<handler-QN tail> -> <route name>"
+ * pairs. The tail is matched at a segment boundary against the handler's
+ * qualified name ("UserController.show" matches
+ * "<project>.app.Http.Controllers.UserController.UserController.show"), so a
+ * same-named method on another class never satisfies it; the total count must
+ * match too, so a fabricated extra edge fails the assertion. */
+typedef struct {
+    const char *handler_tail;
+    const char *route;
+} EtHandles;
+
+static int et_qn_has_tail(const char *qn, const char *tail) {
+    size_t ql = qn ? strlen(qn) : 0;
+    size_t tl = strlen(tail);
+    return ql >= tl && strcmp(qn + ql - tl, tail) == 0 && (ql == tl || qn[ql - tl - 1] == '.');
+}
+
+/* route_qns (optional, NULL-terminated): Route qualified_names that must
+ * exist, so a test asserting that a route gets NO handler cannot pass merely
+ * because the route itself was never extracted. */
+static int et_handles_exact_routes(const EtFile *files, int nfiles, const EtHandles *want,
+                                   int parallel, const char *const *route_qns) {
+    EtProj lp;
+    cbm_store_t *store =
+        parallel ? et_index_parallel(&lp, files, nfiles) : et_index_files(&lp, files, nfiles);
+    int wanted = 0;
+    int found[ET_ROUTE_ASSERT_MAX] = {0};
+    while (want[wanted].handler_tail && wanted < ET_ROUTE_ASSERT_MAX) {
+        wanted++;
+    }
+    cbm_edge_t *edges = NULL;
+    int n = 0;
+    int ok = store != NULL &&
+             cbm_store_find_edges_by_type(store, lp.project, "HANDLES", &edges, &n) ==
+                 CBM_STORE_OK &&
+             n == wanted;
+    for (int i = 0; store && i < n; i++) {
+        cbm_node_t src = {0};
+        cbm_node_t tgt = {0};
+        int have_src = cbm_store_find_node_by_id(store, edges[i].source_id, &src) == CBM_STORE_OK;
+        int have_tgt = cbm_store_find_node_by_id(store, edges[i].target_id, &tgt) == CBM_STORE_OK;
+        int matched = 0;
+        for (int wi = 0; have_src && have_tgt && wi < wanted; wi++) {
+            if (!found[wi] && tgt.name && strcmp(tgt.name, want[wi].route) == 0 &&
+                et_qn_has_tail(src.qualified_name, want[wi].handler_tail)) {
+                found[wi] = matched = 1;
+                break;
+            }
+        }
+        if (!matched) {
+            ok = 0;
+            fprintf(stderr, "  [ET-HANDLES] unexpected %s -> %s\n",
+                    have_src && src.qualified_name ? src.qualified_name : "<?>",
+                    have_tgt && tgt.name ? tgt.name : "<?>");
+        }
+        if (have_src) cbm_node_free_fields(&src);
+        if (have_tgt) cbm_node_free_fields(&tgt);
+    }
+    for (int wi = 0; wi < wanted; wi++) {
+        if (!found[wi]) {
+            ok = 0;
+            fprintf(stderr, "  [ET-HANDLES] missing %s -> %s\n", want[wi].handler_tail,
+                    want[wi].route);
+        }
+    }
+    for (int ri = 0; route_qns && route_qns[ri]; ri++) {
+        cbm_node_t route = {0};
+        if (!store ||
+            cbm_store_find_node_by_qn(store, lp.project, route_qns[ri], &route) != CBM_STORE_OK) {
+            ok = 0;
+            fprintf(stderr, "  [ET-HANDLES] missing Route %s\n", route_qns[ri]);
+        } else {
+            cbm_node_free_fields(&route);
+        }
+    }
+    if (!ok) {
+        fprintf(stderr, "  [ET-HANDLES] FAIL (%s path) expected=%d actual=%d\n",
+                parallel ? "parallel" : "sequential", wanted, n);
+    }
+    if (edges) cbm_store_free_edges(edges, n);
+    et_cleanup(&lp, store);
+    return ok;
+}
+
+static int et_handles_exact(const EtFile *files, int nfiles, const EtHandles *want, int parallel) {
+    return et_handles_exact_routes(files, nfiles, want, parallel, NULL);
+}
+
+/* #1146: Laravel's two class-based handler forms —
+ *   Route::get('/x', [UserController::class, 'show'])   (controller method)
+ *   Route::get('/x', GetCurrentUserController::class)   (invokable: __invoke)
+ * got no HANDLES edge, because the handler scan only took identifiers and
+ * strings. The cross-repo matcher needs HANDLES on the Route, so apps written
+ * this way (the #1146 reporter's included) produced 0 CROSS_HTTP_CALLS.
+ * Controls: an Admin\UserController::show with the same short name (the `use`
+ * statement picks the class), an alias import, a fully-qualified class that is
+ * not imported, a package class under a PSR-4 root whose folder does not
+ * mirror its namespace (Acme\Blog\ -> packages/blog/src/), a decoy __invoke on
+ * another class, and two vendor classes that are not in the repo — those must
+ * get no HANDLES edge at all rather than bind to some other class's
+ * same-named method. composer.json comes first so the no-composer variant
+ * below can index the same fixture without it. */
+static const EtFile et_laravel_class_handlers[] = {
+    {"composer.json", "{\"autoload\": {\"psr-4\": {\"App\\\\\": \"app/\", "
+                      "\"Acme\\\\Blog\\\\\": \"packages/blog/src/\"}}}\n"},
+    {"packages/blog/src/Http/PostsController.php",
+     "<?php\nnamespace Acme\\Blog\\Http;\n\n"
+     "class PostsController {\n"
+     "    public function index() { return ['posts' => []]; }\n}\n"},
+    {"app/Http/Controllers/UserController.php",
+     "<?php\nnamespace App\\Http\\Controllers;\n\n"
+     "class UserController {\n"
+     "    public function show($id) { return ['id' => $id]; }\n"
+     "    public function index() { return []; }\n}\n"},
+    {"app/Http/Controllers/Admin/UserController.php",
+     "<?php\nnamespace App\\Http\\Controllers\\Admin;\n\n"
+     "class UserController {\n"
+     "    public function show($id) { return ['admin' => $id]; }\n}\n"},
+    {"app/Http/Controllers/PostController.php",
+     "<?php\nnamespace App\\Http\\Controllers;\n\n"
+     "class PostController {\n"
+     "    public function show($id) { return ['post' => $id]; }\n}\n"},
+    {"app/Http/Controllers/GetCurrentUserController.php",
+     "<?php\nnamespace App\\Http\\Controllers;\n\n"
+     "class GetCurrentUserController {\n"
+     "    public function __invoke() { return ['me' => true]; }\n}\n"},
+    {"app/Http/Controllers/HealthController.php",
+     "<?php\nnamespace App\\Http\\Controllers;\n\n"
+     "class HealthController {\n"
+     "    public function __invoke() { return ['ok' => true]; }\n}\n"},
+    {"routes/api.php",
+     "<?php\n"
+     "use App\\Http\\Controllers\\UserController;\n"
+     "use App\\Http\\Controllers\\GetCurrentUserController as CurrentUser;\n"
+     "use Acme\\Blog\\Http\\PostsController;\n"
+     "use Illuminate\\Support\\Facades\\Route;\n\n"
+     "Route::get('/users/{id}', [UserController::class, 'show']);\n"
+     "Route::get('/me', CurrentUser::class);\n"
+     "Route::get('/posts/{id}', [\\App\\Http\\Controllers\\PostController::class, 'show']);\n"
+     "Route::get('/blog', [PostsController::class, 'index']);\n"
+     "Route::get('/vendor/{id}', [VendorController::class, 'show']);\n"
+     "Route::get('/vendor-ping', VendorInvokable::class);\n"}};
+
+enum { ET_LARAVEL_CLASS_FILES = 8 };
+
+static const EtHandles et_laravel_class_handles[] = {
+    {"Controllers.UserController.UserController.show", "/users/{id}"},
+    {"GetCurrentUserController.__invoke", "/me"},
+    {"PostController.show", "/posts/{id}"},
+    {"PostsController.index", "/blog"},
+    {NULL, NULL}};
+
+TEST(handles_laravel_class_handlers_issue1146) {
+    ASSERT_TRUE(et_handles_exact(et_laravel_class_handlers, ET_LARAVEL_CLASS_FILES,
+                                 et_laravel_class_handles, 0));
+    PASS();
+}
+
+/* Same fixture through the parallel pipeline (> MIN_FILES_FOR_PARALLEL),
+ * whose route emitter (pass_parallel.c) is a separate code path. */
+TEST(handles_laravel_class_handlers_parallel_issue1146) {
+    ASSERT_TRUE(et_handles_exact(et_laravel_class_handlers, ET_LARAVEL_CLASS_FILES,
+                                 et_laravel_class_handlers, 1));
+    PASS();
+}
+
+/* Without composer.json there is no PSR-4 map: a class is placed only where
+ * its namespace mirrors the folders (App\Http\Controllers -> app/Http/
+ * Controllers). The package class, whose folder does not mirror its
+ * namespace, then gets no handler rather than a guessed one. */
+TEST(handles_laravel_class_handlers_no_composer_issue1146) {
+    static const EtHandles want[] = {
+        {"Controllers.UserController.UserController.show", "/users/{id}"},
+        {"GetCurrentUserController.__invoke", "/me"},
+        {"PostController.show", "/posts/{id}"},
+        {NULL, NULL}};
+    ASSERT_TRUE(
+        et_handles_exact(et_laravel_class_handlers + 1, ET_LARAVEL_CLASS_FILES - 1, want, 0));
+    PASS();
+}
+
+/* A PSR-4 prefix that covers a handler class decides where the class lives,
+ * as it does for the class's `use` import (#1186): when composer would load
+ * no file holding the member, the route stays without a handler. Both routes
+ * below are covered by Acme\Blog\ -> packages/blog/src/:
+ *   /blog/missing  MissingController has no class file there at all;
+ *   /blog/archive  PostsController's class file exists but has no archive().
+ * legacy/Acme/Blog/Http mirrors the namespace and holds both members, so the
+ * namespace/folder fallback would bind both routes to a class composer never
+ * loads. It must not run for a covered class. These files are added to the
+ * fixture above, whose four handlers must keep their edges. */
+static const EtFile et_laravel_psr4_absent_extra[] = {
+    {"legacy/Acme/Blog/Http/MissingController.php",
+     "<?php\nnamespace Acme\\Blog\\Http;\n\n"
+     "class MissingController {\n"
+     "    public function index() { return ['stale' => true]; }\n}\n"},
+    {"legacy/Acme/Blog/Http/PostsController.php",
+     "<?php\nnamespace Acme\\Blog\\Http;\n\n"
+     "class PostsController {\n"
+     "    public function archive() { return ['stale' => true]; }\n}\n"},
+    {"routes/blog.php",
+     "<?php\n"
+     "use Illuminate\\Support\\Facades\\Route;\n\n"
+     "Route::get('/blog/missing', [\\Acme\\Blog\\Http\\MissingController::class, 'index']);\n"
+     "Route::get('/blog/archive', [\\Acme\\Blog\\Http\\PostsController::class, 'archive']);\n"}};
+
+enum { ET_LARAVEL_PSR4_ABSENT_EXTRA = 3 };
+
+static const char *const et_laravel_psr4_absent_routes[] = {
+    "__route__GET__/blog/missing", "__route__GET__/blog/archive", NULL};
+
+static int et_laravel_psr4_absent(int parallel) {
+    EtFile f[ET_LARAVEL_CLASS_FILES + ET_LARAVEL_PSR4_ABSENT_EXTRA];
+    memcpy(f, et_laravel_class_handlers, sizeof(et_laravel_class_handlers));
+    memcpy(f + ET_LARAVEL_CLASS_FILES, et_laravel_psr4_absent_extra,
+           sizeof(et_laravel_psr4_absent_extra));
+    return et_handles_exact_routes(f, ET_LARAVEL_CLASS_FILES + ET_LARAVEL_PSR4_ABSENT_EXTRA,
+                                   et_laravel_class_handles, parallel,
+                                   et_laravel_psr4_absent_routes);
+}
+
+TEST(handles_laravel_psr4_absent_class_issue1146) {
+    ASSERT_TRUE(et_laravel_psr4_absent(0));
+    PASS();
+}
+
+TEST(handles_laravel_psr4_absent_class_parallel_issue1146) {
+    ASSERT_TRUE(et_laravel_psr4_absent(1));
+    PASS();
+}
+
 /* Rails (Ruby) — ActionDispatch router.  The handler MUST be passed as a bare
  * identifier (not the idiomatic `to: 'list_items'` string, which extract_handler_arg
  * cannot capture).  mapper.get resolves by name to the Mapper#get method whose QN
@@ -1968,6 +2328,17 @@ SUITE(edge_types_probe) {
     RUN_TEST(routes_laravel_slashless_parallel_issue1146);
     RUN_TEST(routes_laravel_slashless_no_guessed_handlers_issue1146);
     RUN_TEST(routes_laravel_slashless_no_junk_issue1146);
+    RUN_TEST(routes_laravel_withrouting_api_default_prefix_issue1146);
+    RUN_TEST(routes_laravel_withrouting_api_custom_prefix_issue1146);
+    RUN_TEST(routes_laravel_withrouting_web_no_prefix_issue1146);
+    RUN_TEST(routes_laravel_routeserviceprovider_control_issue1146);
+    RUN_TEST(routes_laravel_withrouting_nonliteral_prefix_issue1146);
+    RUN_TEST(routes_laravel_withrouting_parallel_subdir_issue1146);
+    RUN_TEST(handles_laravel_class_handlers_issue1146);
+    RUN_TEST(handles_laravel_class_handlers_parallel_issue1146);
+    RUN_TEST(handles_laravel_class_handlers_no_composer_issue1146);
+    RUN_TEST(handles_laravel_psr4_absent_class_issue1146);
+    RUN_TEST(handles_laravel_psr4_absent_class_parallel_issue1146);
     RUN_TEST(handles_rails_ruby);
     RUN_TEST(handles_actix_rust);
 
