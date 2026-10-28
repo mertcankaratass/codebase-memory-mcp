@@ -853,6 +853,9 @@ static AxiosWrapperObs observe_axios_wrapper(const char *repo, const char *db) {
     (void)db;
     AxiosWrapperObs o;
     memset(&o, 0xff, sizeof(o)); /* -1 everywhere: "not observed" */
+    char *project = cbm_project_name_from_path(repo);
+    th_remove_project_workspace(project);
+    free(project);
     cbm_pipeline_t *p = cbm_pipeline_new(repo, NULL, CBM_MODE_FULL);
     if (!p) {
         return o;
