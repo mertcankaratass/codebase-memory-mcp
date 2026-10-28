@@ -2534,7 +2534,28 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
             }
         }
 
-        if (!res.qualified_name || res.qualified_name[0] == '\0') {
+        bool unresolved = !res.qualified_name || res.qualified_name[0] == '\0';
+        if (unresolved || cbm_registry_strategy_is_weak(res.strategy)) {
+            /* A callee an import binds to an external client library
+             * (`send` under `from paho.mqtt import publish as send`):
+             * spelled through its import, then classified. The binding
+             * outranks a weak name match. MUST match pass_calls.c. */
+            char spelled[CBM_SZ_512];
+            cbm_svc_kind_t isvc = cbm_pipeline_external_import_service(
+                lang, &result->imports, imp_keys, imp_count, call, spelled, sizeof(spelled));
+            if (isvc != CBM_SVC_NONE) {
+                CBMCall through = *call;
+                through.callee_name = spelled;
+                cbm_resolution_t imp_res = {.qualified_name = spelled,
+                                            .confidence = PP_HALF_CONF,
+                                            .strategy = "import_binding"};
+                emit_http_async_service_edge(ws->local_edge_buf, source_node, &through, &imp_res,
+                                             isvc, through.first_string_arg);
+                ws->calls_resolved++;
+                continue;
+            }
+        }
+        if (unresolved) {
             if (cbm_service_pattern_route_method(call->callee_name) != NULL) {
                 cbm_resolution_t fake_res = {.qualified_name = call->callee_name,
                                              .confidence = PP_HALF_CONF,
@@ -2542,6 +2563,20 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                 emit_service_edge(ws->local_edge_buf, source_node, source_node, call, &fake_res,
                                   module_qn, rc->registry, rc->main_gbuf, imp_keys, imp_vals,
                                   imp_count, false, lang);
+            } else if (cbm_service_pattern_is_global_fetch(call->callee_name)) {
+                /* Native `fetch()` (#856): only the global API once resolution
+                 * has failed to find a local/imported `fetch`. Call the low-level
+                 * emitter directly — emit_service_edge re-derives its own kind
+                 * from res->qualified_name via cbm_service_pattern_match, which
+                 * "fetch" deliberately never matches (mirrors pass_calls.c). */
+                const char *u = call->first_string_arg;
+                if (u && u[0] != '\0' && (u[0] == '/' || strstr(u, "://") != NULL)) {
+                    cbm_resolution_t fake_res = {.qualified_name = call->callee_name,
+                                                 .confidence = PP_HALF_CONF,
+                                                 .strategy = "service_pattern"};
+                    emit_http_async_service_edge(ws->local_edge_buf, source_node, call, &fake_res,
+                                                 CBM_SVC_HTTP, u);
+                }
             }
             continue;
         }
