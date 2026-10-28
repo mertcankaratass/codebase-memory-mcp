@@ -6636,8 +6636,12 @@ static void push_class_body_children(TSNode node, const CBMLangSpec *spec, wd_st
      * so the generic walk must still visit those direct method_definition
      * children. Treating the class itself as a completed body here would only
      * scan it for nested classes and silently drop every method. */
+    /* A TypeScript `namespace` (internal_module) is a class type here only so
+     * it scopes its members; extract_class_methods emits no Methods for its
+     * functions, so the walk must still descend and extract them as Functions
+     * (mn_module_ts_namespace). */
     TSNode body = {0};
-    if (spec->language != CBM_LANG_SMALI) {
+    if (spec->language != CBM_LANG_SMALI && strcmp(ts_node_type(node), "internal_module") != 0) {
         body = find_class_member_body(node, spec->language);
     }
     if (!ts_node_is_null(body) && !ts_node_eq(body, node)) {
