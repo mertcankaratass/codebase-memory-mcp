@@ -7847,13 +7847,11 @@ TEST(pipeline_ts_config_object_url_http_calls_issue2235) {
     char *saved = old_workers ? strdup(old_workers) : NULL;
     cbm_setenv("CBM_WORKERS", "4", 1);
 
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/i2235.db", tmp);
-    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, NULL, CBM_MODE_FULL);
     ASSERT_NOT_NULL(p);
     ASSERT_EQ(cbm_pipeline_run(p), 0);
     const char *project = cbm_pipeline_project_name(p);
-    cbm_store_t *s = cbm_store_open_path(db_path);
+    cbm_store_t *s = th_open_repo_store(tmp);
     ASSERT_NOT_NULL(s);
 
     /* RED before the fix: the url inside the config object was never read. */

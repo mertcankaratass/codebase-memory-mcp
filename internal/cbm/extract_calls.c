@@ -1373,7 +1373,7 @@ static const char *extract_string_value(CBMExtractCtx *ctx, TSNode val_node);
  * sends nothing (Orval's `get<Op>Url` helpers). (#2235) */
 static bool config_object_callee_eligible(const CBMExtractCtx *ctx, const char *callee_name) {
     if (ctx->language != CBM_LANG_JAVASCRIPT && ctx->language != CBM_LANG_TYPESCRIPT &&
-        ctx->language != CBM_LANG_TSX && ctx->language != CBM_LANG_ARKTS) {
+        ctx->language != CBM_LANG_TSX) {
         return false;
     }
     if (!callee_name || cbm_service_pattern_route_method(callee_name) != NULL) {
