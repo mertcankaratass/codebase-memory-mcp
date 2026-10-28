@@ -14,11 +14,10 @@
 #include "tree_sitter/api.h"
 #include "foundation/compat_fs.h"
 #include "foundation/constants.h"
-#include "foundation/mem.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -321,7 +320,7 @@ static char *lr_read_bootstrap(const char *repo_path, const char *app_dir, uint3
     long size = ftell(f);
     (void)fseek(f, 0, SEEK_SET);
     char *buf = (size > 0 && size <= (long)LR_SOURCE_MAX)
-                    ? cbm_alloc(CBM_MEM_CLASS_EXTRACT, (size_t)size + SKIP_ONE)
+                    ? malloc((size_t)size + SKIP_ONE)
                     : NULL;
     if (buf) {
         size_t nread = fread(buf, SKIP_ONE, (size_t)size, f);
@@ -357,7 +356,7 @@ bool cbm_laravel_api_mount(const char *repo_path, const char *rel_path, char *ou
         char *src = lr_read_bootstrap(repo_path, app_dir, &len);
         if (src) {
             bool mounted = lr_mount_from_bootstrap(src, len, app_dir, rel_path, out, out_sz);
-            cbm_free(CBM_MEM_CLASS_EXTRACT, src);
+            free(src);
             if (!mounted) {
                 out[0] = '\0';
             }
