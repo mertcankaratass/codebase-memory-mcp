@@ -6790,7 +6790,7 @@ static void push_dart_unnamed_extension_members(TSNode node, wd_stack_t *s,
 
 // Push nested class children from a class body container onto the walk stack.
 static void push_class_body_children(TSNode node, const CBMLangSpec *spec, wd_stack_t *s,
-                                      const char *new_enclosing, const CBMExtractCtx *ctx) {
+                                     const char *new_enclosing, const CBMExtractCtx *ctx) {
     /* Java interface and enum bodies are member containers too. Without this
      * the walk descended into them and re-extracted their methods as free
      * Functions next to the Methods extract_class_methods emits (#1234). */

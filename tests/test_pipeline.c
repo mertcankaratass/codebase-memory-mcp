@@ -853,9 +853,6 @@ static AxiosWrapperObs observe_axios_wrapper(const char *repo, const char *db) {
     (void)db;
     AxiosWrapperObs o;
     memset(&o, 0xff, sizeof(o)); /* -1 everywhere: "not observed" */
-    char *project = cbm_project_name_from_path(repo);
-    th_remove_project_workspace(project);
-    free(project);
     cbm_pipeline_t *p = cbm_pipeline_new(repo, NULL, CBM_MODE_FULL);
     if (!p) {
         return o;
@@ -889,6 +886,71 @@ static AxiosWrapperObs observe_axios_wrapper(const char *repo, const char *db) {
     return o;
 }
 
+static const char *const AXIOS_CLIENT_V1 =
+    "import axios from 'axios';\n"
+    "const api = axios.create({ baseURL: '/api', timeout: 5000 });\n"
+    "export default api;\n";
+
+static const char *const AXIOS_CLIENT_V3 =
+    "import axios from 'axios';\n"
+    "const api = axios.create({ baseURL: '/v3' });\n"
+    "export default api;\n";
+
+static const char *const AXIOS_ORDERS_V1 =
+    "import api from './client';\n"
+    "import axios from 'axios';\n"
+    "export function loadWrapperOrders(): unknown { return api.get('/orders'); }\n"
+    "export function loadDirectOrders(): unknown { return axios.get('/direct'); }\n";
+
+static const char *const AXIOS_ORDERS_V2 =
+    "import api from './client';\n"
+    "import axios from 'axios';\n"
+    "export function loadWrapperOrders(): unknown { return api.get('/invoices'); }\n"
+    "export function loadDirectOrders(): unknown { return axios.get('/direct'); }\n";
+
+static void populate_axios_wrapper_repo(const char *dir, const char *client_code,
+                                        const char *orders_code) {
+    write_temp_file(dir, "src/client.ts", client_code);
+    write_temp_file(dir, "src/orders.ts", orders_code);
+    write_temp_file(dir, "src/named-client.ts",
+                    "import axios from 'axios';\n"
+                    "export const http = axios.create({ baseURL: '/v2/' });\n");
+    write_temp_file(dir, "src/named-caller.ts",
+                    "import { http } from './named-client';\n"
+                    "export function loadNamedItems(): unknown { return http.post('/items'); }\n");
+    write_temp_file(dir, "src/local.ts",
+                    "import axios from 'axios';\n"
+                    "const axiosInstance = axios.create({ baseURL: '/local' });\n"
+                    "export function loadLocal(): unknown { return axiosInstance.get('/x'); }\n");
+    write_temp_file(dir, "src/dynamic-client.ts",
+                    "import axios from 'axios';\n"
+                    "const dynamicApi = axios.create({ baseURL: process.env.API_BASE });\n"
+                    "export default dynamicApi;\n");
+    write_temp_file(
+        dir, "src/dynamic-caller.ts",
+        "import dynamicApi from './dynamic-client';\n"
+        "export function loadDynamic(): unknown { return dynamicApi.get('/dynamic'); }\n");
+    write_temp_file(dir, "src/fake-client.ts",
+                    "const factory = { create: (config: unknown) => config };\n"
+                    "export default factory;\n");
+    write_temp_file(dir, "src/fake-caller.ts",
+                    "import fakeApi from './fake-client';\n"
+                    "export function loadFake(): unknown { return fakeApi.get('/fake'); }\n");
+    write_temp_file(dir, "src/provider.ts",
+                    "import express from 'express';\n"
+                    "const app = express();\n"
+                    "function provideOrders(): void {}\n"
+                    "app.get('/api/orders', provideOrders);\n");
+    for (int i = 0; i < 52; i++) {
+        char name[64];
+        char body[128];
+        snprintf(name, sizeof(name), "src/wrapper_pad_%02d.ts", i);
+        snprintf(body, sizeof(body), "export function wrapperPad%02d(): number { return %d; }\n", i,
+                 i);
+        write_temp_file(dir, name, body);
+    }
+}
+
 /* #1916: `const api = axios.create({ baseURL: '/api' }); export default api`
  * in one module and `api.get('/orders')` in another is THE Vue-admin wrapper
  * pattern. The call must become HTTP_CALLS to GET /api/orders — before the
@@ -903,91 +965,64 @@ TEST(pipeline_axios_wrapper_baseurl_composes_http_calls_issue1916) {
     if (!cbm_mkdtemp(tmp)) {
         FAIL("tmpdir");
     }
-    write_temp_file(tmp, "src/client.ts",
-                    "import axios from 'axios';\n"
-                    "const api = axios.create({ baseURL: '/api', timeout: 5000 });\n"
-                    "export default api;\n");
-    write_temp_file(
-        tmp, "src/orders.ts",
-        "import api from './client';\n"
-        "import axios from 'axios';\n"
-        "export function loadWrapperOrders(): unknown { return api.get('/orders'); }\n"
-        "export function loadDirectOrders(): unknown { return axios.get('/direct'); }\n");
-    write_temp_file(tmp, "src/named-client.ts",
-                    "import axios from 'axios';\n"
-                    "export const http = axios.create({ baseURL: '/v2/' });\n");
-    write_temp_file(tmp, "src/named-caller.ts",
-                    "import { http } from './named-client';\n"
-                    "export function loadNamedItems(): unknown { return http.post('/items'); }\n");
-    write_temp_file(tmp, "src/local.ts",
-                    "import axios from 'axios';\n"
-                    "const axiosInstance = axios.create({ baseURL: '/local' });\n"
-                    "export function loadLocal(): unknown { return axiosInstance.get('/x'); }\n");
-    write_temp_file(tmp, "src/dynamic-client.ts",
-                    "import axios from 'axios';\n"
-                    "const dynamicApi = axios.create({ baseURL: process.env.API_BASE });\n"
-                    "export default dynamicApi;\n");
-    write_temp_file(
-        tmp, "src/dynamic-caller.ts",
-        "import dynamicApi from './dynamic-client';\n"
-        "export function loadDynamic(): unknown { return dynamicApi.get('/dynamic'); }\n");
-    write_temp_file(tmp, "src/fake-client.ts",
-                    "const factory = { create: (config: unknown) => config };\n"
-                    "export default factory;\n");
-    write_temp_file(tmp, "src/fake-caller.ts",
-                    "import fakeApi from './fake-client';\n"
-                    "export function loadFake(): unknown { return fakeApi.get('/fake'); }\n");
-    write_temp_file(tmp, "src/provider.ts",
-                    "import express from 'express';\n"
-                    "const app = express();\n"
-                    "function provideOrders(): void {}\n"
-                    "app.get('/api/orders', provideOrders);\n");
-    for (int i = 0; i < 52; i++) {
-        char name[64];
-        char body[128];
-        snprintf(name, sizeof(name), "src/wrapper_pad_%02d.ts", i);
-        snprintf(body, sizeof(body), "export function wrapperPad%02d(): number { return %d; }\n", i,
-                 i);
-        write_temp_file(tmp, name, body);
+    char tmp_fresh[256];
+    snprintf(tmp_fresh, sizeof(tmp_fresh), "/tmp/cbm_axios_fresh_XXXXXX");
+    if (!cbm_mkdtemp(tmp_fresh)) {
+        th_rmtree(tmp);
+        FAIL("tmpdir");
     }
+    char tmp_fresh2[256];
+    snprintf(tmp_fresh2, sizeof(tmp_fresh2), "/tmp/cbm_axios_fresh2_XXXXXX");
+    if (!cbm_mkdtemp(tmp_fresh2)) {
+        th_rmtree(tmp);
+        th_rmtree(tmp_fresh);
+        FAIL("tmpdir");
+    }
+
+    populate_axios_wrapper_repo(tmp, AXIOS_CLIENT_V1, AXIOS_ORDERS_V1);
 
     char *old_workers = getenv("CBM_WORKERS");
     char *saved_workers = old_workers ? strdup(old_workers) : NULL;
     char *old_single = getenv("CBM_INDEX_SINGLE_THREAD");
     char *saved_single = old_single ? strdup(old_single) : NULL;
 
-    char db_seq[512];
-    char db_par[512];
-    char db_fresh[512];
-    char db_fresh2[512];
-    snprintf(db_seq, sizeof(db_seq), "%s/seq.db", tmp);
-    snprintf(db_par, sizeof(db_par), "%s/par.db", tmp);
-    snprintf(db_fresh, sizeof(db_fresh), "%s/fresh.db", tmp);
-    snprintf(db_fresh2, sizeof(db_fresh2), "%s/fresh2.db", tmp);
+    char *project = cbm_project_name_from_path(tmp);
+    th_remove_project_workspace(project);
 
     cbm_setenv("CBM_INDEX_SINGLE_THREAD", "1", 1);
-    AxiosWrapperObs seq = observe_axios_wrapper(tmp, db_seq);
+    AxiosWrapperObs seq = observe_axios_wrapper(tmp, NULL);
     cbm_unsetenv("CBM_INDEX_SINGLE_THREAD");
-    cbm_setenv("CBM_WORKERS", "4", 1);
-    AxiosWrapperObs par = observe_axios_wrapper(tmp, db_par);
 
-    /* Only the wrapper changes; the importing caller is untouched. */
-    write_temp_file(tmp, "src/client.ts",
-                    "import axios from 'axios';\n"
-                    "const api = axios.create({ baseURL: '/v3' });\n"
-                    "export default api;\n");
-    AxiosWrapperObs incr = observe_axios_wrapper(tmp, db_par);
-    AxiosWrapperObs fresh = observe_axios_wrapper(tmp, db_fresh);
+    /* Clear workspace so parallel run starts fresh and builds the base generation */
+    th_remove_project_workspace(project);
+    free(project);
+
+    cbm_setenv("CBM_WORKERS", "4", 1);
+    AxiosWrapperObs par = observe_axios_wrapper(tmp, NULL);
+
+    /* Only the wrapper changes; the importing caller is untouched.
+     * Keep workspace so this reindex exercises the incremental route. */
+    write_temp_file(tmp, "src/client.ts", AXIOS_CLIENT_V3);
+    AxiosWrapperObs incr = observe_axios_wrapper(tmp, NULL);
+
+    /* Fresh full index of the mutated tree in tmp_fresh for comparison. */
+    populate_axios_wrapper_repo(tmp_fresh, AXIOS_CLIENT_V3, AXIOS_ORDERS_V1);
+    char *project_fresh = cbm_project_name_from_path(tmp_fresh);
+    th_remove_project_workspace(project_fresh);
+    free(project_fresh);
+    AxiosWrapperObs fresh = observe_axios_wrapper(tmp_fresh, NULL);
+
     /* Then only the caller changes; the (unchanged) wrapper's base must
      * still be found when the caller alone is re-resolved. */
-    write_temp_file(
-        tmp, "src/orders.ts",
-        "import api from './client';\n"
-        "import axios from 'axios';\n"
-        "export function loadWrapperOrders(): unknown { return api.get('/invoices'); }\n"
-        "export function loadDirectOrders(): unknown { return axios.get('/direct'); }\n");
-    AxiosWrapperObs incr2 = observe_axios_wrapper(tmp, db_par);
-    AxiosWrapperObs fresh2 = observe_axios_wrapper(tmp, db_fresh2);
+    write_temp_file(tmp, "src/orders.ts", AXIOS_ORDERS_V2);
+    AxiosWrapperObs incr2 = observe_axios_wrapper(tmp, NULL);
+
+    /* Fresh full index of the second mutation in tmp_fresh2 for comparison. */
+    populate_axios_wrapper_repo(tmp_fresh2, AXIOS_CLIENT_V3, AXIOS_ORDERS_V2);
+    char *project_fresh2 = cbm_project_name_from_path(tmp_fresh2);
+    th_remove_project_workspace(project_fresh2);
+    free(project_fresh2);
+    AxiosWrapperObs fresh2 = observe_axios_wrapper(tmp_fresh2, NULL);
 
     if (saved_workers) {
         cbm_setenv("CBM_WORKERS", saved_workers, 1);
@@ -1001,7 +1036,20 @@ TEST(pipeline_axios_wrapper_baseurl_composes_http_calls_issue1916) {
     } else {
         cbm_unsetenv("CBM_INDEX_SINGLE_THREAD");
     }
+
+    char *p_clean = cbm_project_name_from_path(tmp);
+    th_remove_project_workspace(p_clean);
+    free(p_clean);
+    char *pf_clean = cbm_project_name_from_path(tmp_fresh);
+    th_remove_project_workspace(pf_clean);
+    free(pf_clean);
+    char *pf2_clean = cbm_project_name_from_path(tmp_fresh2);
+    th_remove_project_workspace(pf2_clean);
+    free(pf2_clean);
+
     th_rmtree(tmp);
+    th_rmtree(tmp_fresh);
+    th_rmtree(tmp_fresh2);
 
     ASSERT_EQ(seq.run_rc, 0);
     ASSERT_EQ(par.run_rc, 0);
