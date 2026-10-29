@@ -550,6 +550,95 @@ TEST(java_enum_dedup_preserves_calls_issue1234) {
     PASS();
 }
 
+/* Regression for #91: Scala, Solidity and Ruby class bodies were not
+ * recognized by push_class_body_children, so every method was emitted as a
+ * Method and again as a free Function. The rest of the body must still be
+ * walked: Scala vals and Ruby constants are only found by the walk. */
+TEST(scala_class_no_duplicate_function_issue91) {
+    CBMFileResult *r = extract("class A {\n"
+                               "  val limit: Int = 3\n"
+                               "  def foo(): Int = 1\n"
+                               "  object Inner {\n"
+                               "    def innerFoo(): Int = 2\n"
+                               "  }\n"
+                               "}\n"
+                               "trait T {\n"
+                               "  def tFoo(): Int = 5\n"
+                               "}\n",
+                               CBM_LANG_SCALA, "t", "A.scala");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+
+    ASSERT_EQ(count_defs_named(r, "Method", "foo"), 1);
+    ASSERT_EQ(count_defs_named(r, "Method", "innerFoo"), 1);
+    ASSERT_EQ(count_defs_named(r, "Method", "tFoo"), 1);
+    ASSERT_EQ(count_defs_with_label(r, "Function"), 0);
+    ASSERT(has_def(r, "Variable", "limit"));
+
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(solidity_contract_no_duplicate_function_issue91) {
+    CBMFileResult *r =
+        extract("pragma solidity ^0.8.0;\n"
+                "contract B {\n"
+                "    uint256 public total;\n"
+                "    modifier onlyOwner() { _; }\n"
+                "    function foo() public pure returns (uint) { return 1; }\n"
+                "}\n"
+                "interface IB {\n"
+                "    function bar() external;\n"
+                "}\n"
+                "library LB {\n"
+                "    function baz() internal pure returns (uint) { return 2; }\n"
+                "}\n",
+                CBM_LANG_SOLIDITY, "t", "B.sol");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+
+    ASSERT_EQ(count_defs_named(r, "Method", "foo"), 1);
+    ASSERT_EQ(count_defs_named(r, "Method", "onlyOwner"), 1);
+    ASSERT_EQ(count_defs_named(r, "Method", "bar"), 1);
+    ASSERT_EQ(count_defs_named(r, "Method", "baz"), 1);
+    ASSERT_EQ(count_defs_with_label(r, "Function"), 0);
+
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(ruby_class_no_duplicate_function_issue91) {
+    CBMFileResult *r = extract("class C\n"
+                               "  LIMIT = 3\n"
+                               "  def foo\n"
+                               "    1\n"
+                               "  end\n"
+                               "  def self.sfoo\n"
+                               "    2\n"
+                               "  end\n"
+                               "  class << self\n"
+                               "    def cfoo\n"
+                               "      3\n"
+                               "    end\n"
+                               "  end\n"
+                               "end\n",
+                               CBM_LANG_RUBY, "t", "c.rb");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+
+    ASSERT_EQ(count_defs_named(r, "Method", "foo"), 1);
+    ASSERT_EQ(count_defs_named(r, "Function", "foo"), 0);
+    ASSERT_EQ(count_defs_named(r, "Method", "sfoo"), 1);
+    ASSERT_EQ(count_defs_named(r, "Function", "sfoo"), 0);
+    /* Not a direct body member, so extract_class_methods never sees it: the
+     * walk must keep reaching it. */
+    ASSERT(has_def_any(r, "cfoo"));
+    ASSERT(has_def(r, "Variable", "LIMIT"));
+
+    cbm_free_result(r);
+    PASS();
+}
+
 /* Regression for #279: a Java class declaring both `extends` and
  * `implements` must produce one INHERITS edge per base — the extends parent
  * AND every implements interface — with bare type names (not the keyword
@@ -4710,6 +4799,138 @@ TEST(extract_ts_template_string_url_issue1006) {
     PASS();
 }
 
+/* Issue #1005: JAX-RS splits a route across two annotations (@GET carries the
+ * verb, a sibling @Path carries the path). Returning on the first mapping
+ * annotation dropped every method-level @Path, and the class-level @Path
+ * prefix was never recognized at all. */
+TEST(extract_java_jaxrs_path_composition_issue1005) {
+    CBMFileResult *r = extract("import jakarta.ws.rs.GET;\n"
+                               "import jakarta.ws.rs.Path;\n"
+                               "@Path(\"/api/v1/widgets\")\n"
+                               "public class WidgetResource {\n"
+                               "  @GET\n"
+                               "  public String list() { return \"\"; }\n"
+                               "  @GET\n"
+                               "  @Path(\"/count\")\n"
+                               "  public String count() { return \"\"; }\n"
+                               "}\n",
+                               CBM_LANG_JAVA, "t", "WidgetResource.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *list = find_def_by_name(r, "list");
+    ASSERT_NOT_NULL(list);
+    ASSERT_NOT_NULL(list->route_path);
+    ASSERT_STR_EQ(list->route_path, "/api/v1/widgets");
+    ASSERT_STR_EQ(list->route_method, "GET");
+    const CBMDefinition *count = find_def_by_name(r, "count");
+    ASSERT_NOT_NULL(count);
+    ASSERT_NOT_NULL(count->route_path);
+    ASSERT_STR_EQ(count->route_path, "/api/v1/widgets/count");
+    ASSERT_STR_EQ(count->route_method, "GET");
+    cbm_free_result(r);
+    PASS();
+}
+
+/* JAX-RS @Path values are URI templates relative to the enclosing resource;
+ * the leading slash is optional and ignored by the framework. Relative class
+ * and method templates must compose to the same rooted routes as the
+ * slash-prefixed spelling above. */
+TEST(extract_java_jaxrs_relative_path_templates) {
+    CBMFileResult *r = extract("import jakarta.ws.rs.GET;\n"
+                               "import jakarta.ws.rs.Path;\n"
+                               "@Path(\"api/v1/widgets\")\n"
+                               "public class WidgetResource {\n"
+                               "  @GET\n"
+                               "  public String list() { return \"\"; }\n"
+                               "  @GET\n"
+                               "  @Path(\"count\")\n"
+                               "  public String count() { return \"\"; }\n"
+                               "  @GET\n"
+                               "  @Path(\"{id}/tags\")\n"
+                               "  public String tags() { return \"\"; }\n"
+                               "}\n",
+                               CBM_LANG_JAVA, "t", "WidgetResource.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *list = find_def_by_name(r, "list");
+    ASSERT_NOT_NULL(list);
+    ASSERT_NOT_NULL(list->route_path);
+    ASSERT_STR_EQ(list->route_path, "/api/v1/widgets");
+    ASSERT_STR_EQ(list->route_method, "GET");
+    const CBMDefinition *count = find_def_by_name(r, "count");
+    ASSERT_NOT_NULL(count);
+    ASSERT_NOT_NULL(count->route_path);
+    ASSERT_STR_EQ(count->route_path, "/api/v1/widgets/count");
+    ASSERT_STR_EQ(count->route_method, "GET");
+    const CBMDefinition *tags = find_def_by_name(r, "tags");
+    ASSERT_NOT_NULL(tags);
+    ASSERT_NOT_NULL(tags->route_path);
+    ASSERT_STR_EQ(tags->route_path, "/api/v1/widgets/{id}/tags");
+    ASSERT_STR_EQ(tags->route_method, "GET");
+    cbm_free_result(r);
+    PASS();
+}
+
+/* @Path("") is legal JAX-RS and means "the class path itself". Accepting
+ * relative templates must not turn it into an empty route path: the method
+ * has to behave exactly like one without @Path (fallback to "/", then
+ * class-level composition). The class without a class-level @Path is the
+ * binding case: an empty method path would otherwise drop the route. */
+TEST(extract_java_jaxrs_empty_path_means_class_path) {
+    CBMFileResult *r = extract("import jakarta.ws.rs.GET;\n"
+                               "import jakarta.ws.rs.Path;\n"
+                               "@Path(\"api/v1/widgets\")\n"
+                               "class WidgetResource {\n"
+                               "  @GET\n"
+                               "  @Path(\"\")\n"
+                               "  public String root() { return \"\"; }\n"
+                               "}\n"
+                               "class RootResource {\n"
+                               "  @GET\n"
+                               "  @Path(\"\")\n"
+                               "  public String index() { return \"\"; }\n"
+                               "}\n",
+                               CBM_LANG_JAVA, "t", "Resources.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *root = find_def_by_name(r, "root");
+    ASSERT_NOT_NULL(root);
+    ASSERT_NOT_NULL(root->route_path);
+    ASSERT_STR_EQ(root->route_path, "/api/v1/widgets");
+    ASSERT_STR_EQ(root->route_method, "GET");
+    const CBMDefinition *index = find_def_by_name(r, "index");
+    ASSERT_NOT_NULL(index);
+    ASSERT_NOT_NULL(index->route_path);
+    ASSERT_STR_EQ(index->route_path, "/");
+    ASSERT_STR_EQ(index->route_method, "GET");
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Negative control: relative templates are accepted for JAX-RS @Path only.
+ * A slash-less string on a non-JAX-RS mapping annotation must keep the
+ * previous behaviour (the literal is not read as a route path), so the
+ * relaxation cannot broaden route extraction for other frameworks. */
+TEST(extract_java_spring_relative_string_not_route_path) {
+    CBMFileResult *r = extract("import org.springframework.web.bind.annotation.GetMapping;\n"
+                               "import org.springframework.web.bind.annotation.RequestMapping;\n"
+                               "@RequestMapping(\"api\")\n"
+                               "public class OrderController {\n"
+                               "  @GetMapping(\"orders\")\n"
+                               "  public String listOrders() { return \"\"; }\n"
+                               "}\n",
+                               CBM_LANG_JAVA, "t", "OrderController.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *list = find_def_by_name(r, "listOrders");
+    ASSERT_NOT_NULL(list);
+    ASSERT_NOT_NULL(list->route_path);
+    ASSERT_STR_EQ(list->route_path, "/");
+    ASSERT_STR_EQ(list->route_method, "GET");
+    cbm_free_result(r);
+    PASS();
+}
+
 /* Ported from upstream 478ce25c. */
 /* Issue #1249: a mux route built as `configVar + "/literal"` (Go's idiomatic
  * configurable-base-path pattern) must index the literal suffix, both for a
@@ -5754,6 +5975,9 @@ SUITE(extraction) {
     RUN_TEST(java_interface);
     RUN_TEST(java_interface_no_duplicate_function_issue1234);
     RUN_TEST(java_enum_dedup_preserves_calls_issue1234);
+    RUN_TEST(scala_class_no_duplicate_function_issue91);
+    RUN_TEST(solidity_contract_no_duplicate_function_issue91);
+    RUN_TEST(ruby_class_no_duplicate_function_issue91);
     RUN_TEST(java_class_extends_and_implements);
     RUN_TEST(python_class_base_extracted_bare);
     RUN_TEST(php_class);
@@ -6001,6 +6225,10 @@ SUITE(extraction) {
 
     cbm_shutdown();
     RUN_TEST(extract_ts_template_string_url_issue1006);
+    RUN_TEST(extract_java_jaxrs_path_composition_issue1005);
+    RUN_TEST(extract_java_jaxrs_relative_path_templates);
+    RUN_TEST(extract_java_jaxrs_empty_path_means_class_path);
+    RUN_TEST(extract_java_spring_relative_string_not_route_path);
     RUN_TEST(extract_go_binary_concat_url_issue1249);
     RUN_TEST(extract_go_binary_concat_url_no_literal_suffix_issue1249);
     RUN_TEST(extract_c_test_dir_marks_is_test_issue1294);
