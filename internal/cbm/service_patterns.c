@@ -544,17 +544,48 @@ static const method_suffix_t method_suffixes[] = {
 
 /* ── Matching implementation ───────────────────────────────────── */
 
-/* Check if any library identifier appears as a substring in the QN.
- * Case-sensitive: "requests" matches "project.venv.requests.api.get"
- * but not "Requests". Library names are specific enough to avoid
- * false positives even with substring matching. */
+static bool is_digit_char(char ch) {
+    return ch >= '0' && ch <= '9';
+}
+
+static bool qn_is_alnum(char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || is_digit_char(ch);
+}
+
+static bool qn_is_lower(char ch) {
+    return ch >= 'a' && ch <= 'z';
+}
+
+static bool qn_hit_on_boundary(const char *qn, const char *hit, const char *id, size_t id_len) {
+    char first = id[0];
+    char last = id[id_len - 1];
+    if (hit > qn && qn_is_alnum(hit[-1]) && (qn_is_lower(first) || is_digit_char(first))) {
+        return false;
+    }
+    if (qn_is_alnum(last) && qn_is_lower(hit[id_len])) {
+        return false;
+    }
+    return true;
+}
+
+/* Check if any library identifier appears in the QN on identifier
+ * boundaries. Case-sensitive: "requests" matches
+ * "project.venv.requests.api.get" and "svc.requests_get" but neither
+ * "Requests" nor "myrequests". */
 static const lib_pattern_t *match_qn(const char *qn, const lib_pattern_t *patterns) {
     if (!qn || !qn[0]) {
         return NULL;
     }
     for (int i = 0; patterns[i].library_id != NULL; i++) {
-        if (strstr(qn, patterns[i].library_id) != NULL) {
-            return &patterns[i];
+        const char *id = patterns[i].library_id;
+        size_t id_len = strlen(id);
+        if (id_len == 0) {
+            continue;
+        }
+        for (const char *hit = strstr(qn, id); hit != NULL; hit = strstr(hit + 1, id)) {
+            if (qn_hit_on_boundary(qn, hit, id, id_len)) {
+                return &patterns[i];
+            }
         }
     }
     return NULL;
@@ -582,10 +613,6 @@ static bool contains_segment(const char *path, const char *segment) {
         }
     }
     return false;
-}
-
-static bool is_digit_char(char ch) {
-    return ch >= '0' && ch <= '9';
 }
 
 static bool has_http_route_marker(const char *path) {
