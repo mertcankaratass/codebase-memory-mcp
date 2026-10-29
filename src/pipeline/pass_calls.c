@@ -662,6 +662,18 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
          * Native `fetch()` (#856) belongs here too, not in the substring
          * tables above: it only counts as the global API once resolution has
          * already failed to find a local/imported `fetch` definition. */
+        /* Route registration on an unresolvable callee (#952): facade-style
+         * Laravel (`Route::get('/x', ...)`) — the facade class lives in
+         * vendor/ and is never indexed, so resolution is ALWAYS empty in real
+         * apps. Classify by callee suffix + path-shaped first arg, exactly
+         * like the parallel path's callee_suffix fallback; without this the
+         * sequential path minted zero Route nodes for such files. */
+        if (cbm_service_pattern_route_method(call->callee_name) != NULL && call->first_string_arg &&
+            call->first_string_arg[0] == '/') {
+            handle_route_registration(ctx, call, source_node, module_qn, imp_keys, imp_vals,
+                                      imp_count);
+            return SKIP_ONE;
+        }
         cbm_svc_kind_t esvc = cbm_service_pattern_match(call->callee_name);
         if (esvc == CBM_SVC_NONE && cbm_service_pattern_is_global_fetch(call->callee_name)) {
             esvc = CBM_SVC_HTTP;
@@ -755,6 +767,19 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
      * Store.commit() call to a JS function named commit (or a Bash main
      * to a Python main). Drop that weak cross-language edge. */
     if (cbm_suppress_cross_language_suffix_match(lang, target_node->file_path, res.strategy)) {
+        /* Refusing the binding leaves the callee unresolved, and an
+         * unresolved route-registration callee is still a registration:
+         * `Route::get('/x', ...)` beside a JS `get`, `app.get('/x', h)`
+         * beside a Python `get`. Give it the same Route the #952
+         * unresolved-callee fallback above mints, and nothing else. Dropping
+         * the whole call lost every GET registration in a mixed-language repo
+         * while POST (no `post` to collide with) survived. */
+        if (cbm_service_pattern_route_method(call->callee_name) != NULL && call->first_string_arg &&
+            call->first_string_arg[0] == '/') {
+            handle_route_registration(ctx, call, source_node, module_qn, imp_keys, imp_vals,
+                                      imp_count);
+            return SKIP_ONE;
+        }
         return 0;
     }
     emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn, imp_keys, imp_vals,
