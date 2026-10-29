@@ -582,6 +582,100 @@ TEST(handles_spring_kotlin) {
     PASS();
 }
 
+/* JAX-RS (Java): the verb (@GET) and the path (@Path) are sibling
+ * annotations, and the class-level @Path must prefix method-level paths.
+ * Reproduce-first (#1005): the first-mapping-annotation scan dropped every
+ * method-level @Path, collapsing all methods onto a single "/" Route node;
+ * only the exact Route-name set catches that through the emission dedup. */
+TEST(handles_jaxrs_java) {
+    static const char *routes[] = {"/api/v1/widgets", "/api/v1/widgets/count", NULL};
+    static const EtFile f[] = {
+        {"WidgetResource.java",
+         "package com.example;\n\n"
+         "import jakarta.ws.rs.GET;\n"
+         "import jakarta.ws.rs.Path;\n\n"
+         "@Path(\"/api/v1/widgets\")\npublic class WidgetResource {\n"
+         "    @GET\n"
+         "    public String list() {\n"
+         "        return \"widgets\";\n    }\n\n"
+         "    @GET\n"
+         "    @Path(\"/count\")\n"
+         "    public String count() {\n"
+         "        return \"42\";\n    }\n}\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 2));
+    ASSERT_TRUE(et_routes_exact(f, 1, routes));
+    PASS();
+}
+
+/* JAX-RS (Java): class- and method-level @Path without leading slashes must
+ * compose to the same rooted routes as the slash-prefixed spelling above. */
+TEST(handles_jaxrs_java_relative_path) {
+    static const char *routes[] = {"/api/v1/widgets", "/api/v1/widgets/count",
+                                   "/api/v1/widgets/{id}/tags", NULL};
+    static const EtFile f[] = {
+        {"WidgetResource.java",
+         "package com.example;\n\n"
+         "import jakarta.ws.rs.GET;\n"
+         "import jakarta.ws.rs.Path;\n\n"
+         "@Path(\"api/v1/widgets\")\npublic class WidgetResource {\n"
+         "    @GET\n"
+         "    public String list() {\n"
+         "        return \"widgets\";\n    }\n\n"
+         "    @GET\n"
+         "    @Path(\"count\")\n"
+         "    public String count() {\n"
+         "        return \"42\";\n    }\n\n"
+         "    @GET\n"
+         "    @Path(\"{id}/tags\")\n"
+         "    public String tags() {\n"
+         "        return \"tags\";\n    }\n}\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 3));
+    ASSERT_TRUE(et_routes_exact(f, 1, routes));
+    PASS();
+}
+
+/* Negative control: relative paths are accepted for JAX-RS only. Non-JAX-RS
+ * annotations with a slash-less string argument must keep the previous
+ * behaviour (the literal is not read as a route path), so @GetMapping("orders")
+ * falls back to the default "/" route. */
+TEST(handles_spring_java_relative_string_not_route) {
+    static const char *routes[] = {"/api", NULL};
+    static const EtFile f[] = {
+        {"OrderController.java",
+         "package com.example;\n\n"
+         "import org.springframework.web.bind.annotation.GetMapping;\n"
+         "import org.springframework.web.bind.annotation.RequestMapping;\n\n"
+         "@RequestMapping(\"/api\")\npublic class OrderController {\n"
+         "    @GetMapping(\"orders\")\n"
+         "    public String listOrders() {\n"
+         "        return \"orders\";\n    }\n}\n"}};
+    ASSERT_TRUE(et_routes_exact(f, 1, routes));
+    PASS();
+}
+
+/* JAX-RS (Scala): class-level @Path must be composed with both an empty
+ * method path and a non-empty one. Without the Scala branch in
+ * push_method_def, unrelated resources collapse onto the global verb/root
+ * Route node. */
+TEST(handles_jaxrs_scala) {
+    static const char *routes[] = {"/billingAccount", "/billingAccount/{id}",
+                                   "/billingAccount/{id}/attachment/{attachmentId}/content", NULL};
+    static const EtFile f[] = {
+        {"BillingAccountApiController.scala",
+         "package com.example\n\n"
+         "import jakarta.ws.rs.{GET, POST, Path}\n\n"
+         "@Path(\"/billingAccount\")\nclass BillingAccountApiController {\n"
+         "  @POST\n  @Path(\"\")\n"
+         "  def createBillingAccount(): String = \"created\"\n\n"
+         "  @GET\n  @Path(\"{id}\")\n"
+         "  def retrieveBillingAccount(): String = \"account\"\n\n"
+         "  @GET\n  @Path(\"{id}/attachment/{attachmentId}/content\")\n"
+         "  def retrieveAttachment(): String = \"attachment\"\n}\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 3));
+    ASSERT_TRUE(et_routes_exact(f, 1, routes));
+    PASS();
+}
+
 /* ASP.NET Minimal API (C#) — route registration via static MapGet/MapPost calls
  * with identifier handlers, under a Microsoft/AspNetCore path so the resolved
  * callee QN carries the "MapGet"/"Microsoft.AspNetCore" route-reg substrings.
@@ -1656,6 +1750,10 @@ SUITE(edge_types_probe) {
     RUN_TEST(handles_spring_java);
     RUN_TEST(handles_spring_java_path_attribute_fourth);
     RUN_TEST(handles_spring_kotlin);
+    RUN_TEST(handles_jaxrs_java);
+    RUN_TEST(handles_jaxrs_java_relative_path);
+    RUN_TEST(handles_spring_java_relative_string_not_route);
+    RUN_TEST(handles_jaxrs_scala);
     RUN_TEST(handles_aspnet_csharp);
     RUN_TEST(handles_laravel_php);
     RUN_TEST(handles_rails_ruby);
