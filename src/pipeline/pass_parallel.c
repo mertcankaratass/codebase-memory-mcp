@@ -2221,30 +2221,33 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
 
     bool has_url = (arg && arg[0] != '\0' && (arg[0] == '/' || strstr(arg, "://") != NULL));
     bool has_topic = (arg && arg[0] != '\0' && svc == CBM_SVC_ASYNC && strlen(arg) > PP_ESC_SPACE);
-    /* Set when this call already has its HTTP_CALLS edge from the service
-     * patterns (typed with the verb its callee names). */
-    bool http_edge_emitted = false;
+    /* Set when this call already has its HTTP_CALLS or ASYNC_CALLS edge from the
+     * service patterns. */
+    bool service_edge_emitted = false;
 
     if ((svc == CBM_SVC_HTTP || svc == CBM_SVC_ASYNC) && (has_url || has_topic)) {
         emit_http_async_service_edge(gbuf, source, call, res, svc, arg);
-        http_edge_emitted = svc == CBM_SVC_HTTP;
+        service_edge_emitted = true;
     } else if (svc == CBM_SVC_GRPC) {
         emit_grpc_edge(gbuf, source, call, res);
+        service_edge_emitted = true;
     } else if (svc == CBM_SVC_GRAPHQL) {
         emit_graphql_edge(gbuf, source, call, res);
+        service_edge_emitted = true;
     } else if (svc == CBM_SVC_TRPC) {
         emit_trpc_edge(gbuf, source, call, res);
+        service_edge_emitted = true;
     } else if (svc == CBM_SVC_CONFIG) {
         emit_config_edge(gbuf, source, target, call, res, arg);
+        service_edge_emitted = true;
     } else if (!suppress_plain_calls) {
         emit_normal_calls_edge(gbuf, source, target, call, res);
     }
 
     /* The arg-URL heuristic is for calls no service pattern knows (a local
-     * fetch wrapper). On a classified HTTP call it only minted a method-less
-     * __route__ANY__ twin of the typed edge, which cross-repo matching then
-     * bound to server handlers of any method. */
-    if (!http_edge_emitted) {
+     * fetch wrapper). On a classified HTTP call or async message dispatch,
+     * skip detect_url_in_args so it does not mint a spurious HTTP_CALLS edge. */
+    if (!service_edge_emitted && svc != CBM_SVC_HTTP && svc != CBM_SVC_ASYNC) {
         detect_url_in_args(gbuf, source, call, lang);
     }
 }
